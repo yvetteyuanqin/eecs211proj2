@@ -27,6 +27,12 @@ public class UserProcess {
         pageTable = new TranslationEntry[numPhysPages];
         for (int i = 0; i < numPhysPages; i++)
             pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
+        //increment PID to identify root process
+        cntLock    = new Lock();
+        cntLock.acquire();
+        PID = counter++;
+        cntLock.release();
+        //openfile
     }
     
     /**
@@ -336,7 +342,9 @@ public class UserProcess {
      * Handle the halt() system call.
      */
     private int handleHalt() {
-        
+        if(PID !=0) {
+            return 0;
+        }
         Machine.halt();
         
         Lib.assertNotReached("Machine.halt() did not halt machine!");
@@ -344,8 +352,47 @@ public class UserProcess {
     }
     
     /*Implement our system calls starting here, function notations copy from syscall.h*/
-    private int handleCreate(char *name);
     
+    /**
+     * Attempt to open the named disk file, creating it if it does not exist,
+     * and return a file descriptor that can be used to access the file.
+     *
+     * Note that create() can only be used to create files on disk; creat() will
+     * never return a file descriptor referring to a stream.
+     *
+     * Returns the new file descriptor, or -1 if an error occurred.
+     */
+    private int handleCreate(int a0)
+    
+    {
+        if(a0<0) {
+            Lib.debug(dbgProcess, "handleOpen:Invalid virtual address");
+            return -1;
+        }
+        String fileName = readVirtualMemoryString(a0,256);
+        Lib.debug(dbgProcess, "filename: "+fileName);
+        if(fileName == null) {
+            Lib.debug(dbgProcess, "handleCreate:Read filename failed ");
+            return -1;
+        }
+        int openfileNum = -1;//implementation should support up to 16 concurrently open files per process
+        for(int i=0;i<16;i++){
+            if(descriptors[i]==null){
+                openfileNum=i;
+                break;
+            }
+        }
+        if(openfileNum != -1) {
+            OpenFile file = ThreadedKernel.fileSystem.open(fileName, true);
+            if(file !=null) {
+                descriptors[openfileNum] = file;
+                return openfileNum;
+            }else
+                return -1;
+        }else
+            return -1;
+        
+    }
     /**
      * Attempt to open the named file and return a file descriptor.
      *
@@ -354,8 +401,35 @@ public class UserProcess {
      *
      * Returns the new file descriptor, or -1 if an error occurred.
      */
-    private int handleOpen(char *name);
-    
+    private int handleOpen(int a0)
+    {
+        if(a0<0) {
+            Lib.debug(dbgProcess, "handleOpen:Invalid virtual address");
+            return -1;
+        }
+        String fileName = readVirtualMemoryString(a0,256);
+        Lib.debug(dbgProcess, "filename: "+fileName);
+        if(fileName == null) {
+            Lib.debug(dbgProcess, "handleCreate:Read filename failed ");
+            return -1;
+        }
+        int openfileNum = -1;//implementation should support up to 16 concurrently open files per process
+        for(int i=0;i<16;i++){
+            if(descriptors[i]==null){
+                openfileNum=i;
+                break;
+            }
+        }
+        if(openfileNum != -1) {
+            OpenFile file = ThreadedKernel.fileSystem.open(fileName, false);
+            if(file !=null) {
+                descriptors[openfileNum] = file;
+                return openfileNum;
+            }else //fileopen failed
+                return -1;
+        }else
+            return -1;
+    }
     /**
      * Attempt to read up to count bytes into buffer from the file or stream
      * referred to by fileDescriptor.
@@ -376,8 +450,37 @@ public class UserProcess {
      * invalid, or if a network stream has been terminated by the remote host and
      * no more data is available.
      */
-    private int handleRead(int fileDescriptor, void *buffer, int count);
     
+    private int handleRead(int fDescriptor, int buffer, int count)
+    {
+        if(fDescriptor<0||fDescriptor>15) {
+            Lib.debug(dbgProcess, "handleRead:Descriptor out of range");
+            return -1;
+        }
+        if(count<0){
+            Lib.debug(dbgProcess, "handleRead:Size to read cannot be negative");
+            return -1;
+        }
+        OpenFile file;//or OpenFile file
+        if(descriptors[fDescriptor] != null) {
+            file = descriptors[fDescriptor];
+        }else {
+            Lib.debug(dbgProcess, "handleRead:File doesn't exist in the descriptor table");
+            return -1;
+        }
+        int length = 0;
+        byte[] readIn = new byte[count];
+        length = file.read(readIn,0,count);
+        if(length==-1){
+            Lib.debug(dbgProcess, "handleRead:Error occurred when try to read file");
+            return -1;
+        }else {
+            int number = writeVirtualMemory(buffer,readIn);
+            //file.position = file.position+number;
+            return number;
+        }
+        
+    }
     /**
      * Attempt to write up to count bytes from buffer to the file or stream
      * referred to by fileDescriptor. write() can return before the bytes are
@@ -395,8 +498,35 @@ public class UserProcess {
      * happen if fileDescriptor is invalid, if part of the buffer is invalid, or
      * if a network stream has already been terminated by the remote host.
      */
-    private int handleWrite(int fileDescriptor, void *buffer, int count);
-    
+    private int handleWrite (int fDescriptor, int buffer, int count)
+    {
+        if(fDescriptor<0||fDescriptor>15) {
+            Lib.debug(dbgProcess, "handleWrite:Descriptor out of range");
+            return -1;
+        }
+        if(count<0){
+            Lib.debug(dbgProcess, "handleWRite:Size to read cannot be negative");
+            return -1;
+        }
+        OpenFile file;//or OpenFile file
+        if(descriptors[fDescriptor] != null) {
+            file = descriptors[fDescriptor];
+        }else {
+            Lib.debug(dbgProcess, "handleWrite:File doesn't exist in the descriptor table");
+            return -1;
+        }
+        int length = 0;
+        byte[] writeIn = new byte[count];
+        length = readVirtualMemory(buffer,writeIn,0,count);
+        if(length==-1){
+            Lib.debug(dbgProcess, "handleWrite:Error occurred when try to read file");
+            return -1;
+        }else {
+            int number = writeVirtualMemory(buffer,writeIn);
+            //file.position = file.position+number;
+            return number;
+        }
+    }
     /**
      * Close a file descriptor, so that it no longer refers to any file or stream
      * and may be reused.
@@ -414,7 +544,21 @@ public class UserProcess {
      *
      * Returns 0 on success, or -1 if an error occurred.
      */
-    private int handleClose(int fileDescriptor);
+    private int handleClose(int fDescriptor) {
+        if(fDescriptor<0||fDescriptor>15) {
+            Lib.debug(dbgProcess, "handleClose:Descriptor out of range");
+            return -1;
+        }
+        
+        if(descriptors[fDescriptor] != null) {
+            descriptors[fDescriptor].close();
+            descriptors[fDescriptor] = null;
+        }else {
+            Lib.debug(dbgProcess, "handleClose:File doesn't exist in the descriptor table");
+            return -1;
+        }
+        return 0;
+    }
     
     /**
      * Delete a file from the file system. If no processes have the file open, the
@@ -428,20 +572,45 @@ public class UserProcess {
      *
      * Returns 0 on success, or -1 if an error occurred.
      */
-    private int handleUnlink(char *name);
+    private int handleUnlink(int a0) {
+        if(a0<0) {
+            Lib.debug(dbgProcess, "handleUnlink:Invalid virtual address");
+            return -1;
+        }
+        String fileName = readVirtualMemoryString(a0,256);
+        Lib.debug(dbgProcess, "filename: "+fileName);
+        if(fileName == null) {
+            Lib.debug(dbgProcess, "handleUnlink:Read filename failed ");
+            return -1;
+        }
+        int openfileNum = -1;//implementation should support up to 16 concurrently open files per process
+        //OpenFile file;
+        for(int i=0;i<16;i++){
+            if(descriptors[i]!=null&&descriptors[i].getName().compareTo(fileName)==0){
+                openfileNum=i;
+                break;
+            }
+        }
+        if(openfileNum != -1) {
+            
+            return -1;//should close files first
+        }
+        boolean isRemoved = ThreadedKernel.fileSystem.remove(fileName);
+        if(!isRemoved)
+        {
+            Lib.debug(dbgProcess, "handleUnlink:Remove failed");
+            return -1;
+        }
+        return 0;
+    }
     
-    /**
-     * Map the file referenced by fileDescriptor into memory at address. The file
-     * may be as large as 0x7FFFFFFF bytes.
-     *
-     * To maintain consistency, further calls to read() and write() on this file
-     * descriptor will fail (returning -1) until the file descriptor is closed.
-     *
-     * When the file descriptor is closed, all remaining dirty pages of the map
-     * will be flushed to disk and the map will be removed.
-     *
-     * Returns the length of the file on success, or -1 if an error occurred.
-     */
+    
+    
+    
+    
+    
+    
+    
     /*End of implementation of our system calls*/
     
     
@@ -593,5 +762,11 @@ public class UserProcess {
     private static final int pageSize = Processor.pageSize;
     
     private static final char dbgProcess = 'a';
+    
+    /*self-defined and used*/
+    protected static int counter = 0;
+    protected int PID;//process number to identify root process used in halt()
+    protected Lock cntLock = new Lock();//counter lock
+    protected OpenFile[] descriptors;
+    
 }
-
