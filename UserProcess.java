@@ -84,7 +84,7 @@ public class UserProcess {
      *  allocating the machine's physical memory so that different processes
      *  do not overlap in their memory usage.  allocate a fixed number of pages for the process's stack;
      */
-	public boolean allocate(int vpn, int needPages, boolean isReadOnly){
+	public boolean allocatePhysicalMemory(int vpn, int needPages, boolean readOnly){
 		LinkedList<TranslationEntry> allocatePages = new LinkedList<TranslationEntry>()
 		
 		for(int i = 0; i < needPages; i++){
@@ -103,7 +103,7 @@ public class UserProcess {
 				return false;
 			
 			}else{
-				TranslationEntry target = new TranslationEntry(vpn+i,ppn,true, isReadOnly, false, false);
+				TranslationEntry target = new TranslationEntry(vpn+i,ppn,true, readOnly, false, false);
 				allocatePages.add(target);
 				pageTable[vpn + i] = target;
 				numPages++;
@@ -318,6 +318,13 @@ public class UserProcess {
                 Lib.debug(dbgProcess, "\tfragmented executable");
                 return false;
             }
+			//*****************************************************
+			if(allocatePhysicalMemory(numPages, section.getLength(), section.isReadOnly()) == false){
+				releaseResource();
+				return false;
+			}
+			//**************************************************
+			
             numPages += section.getLength();
         }
 
@@ -411,6 +418,17 @@ public class UserProcess {
      * Release any resources allocated by <tt>loadSections()</tt>.
      */
     protected void unloadSections() {
+		releaseResource();
+		for(int i = 0; i< 16; i++){
+				if(descriptors[i] != null){
+					descriptors[i].close();
+					descriptors[i] = null;
+				}
+			
+		}
+		
+		coff.close();
+		
     }
 
     /**
@@ -449,6 +467,10 @@ public class UserProcess {
         return 0;
     }
 
+	
+	
+	
+	
     /*Implement our system calls starting here, function notations copy from syscall.h*/
 
     /**
