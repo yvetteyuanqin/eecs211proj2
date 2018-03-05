@@ -172,6 +172,17 @@ public class UserProcess {
         return readVirtualMemory(vaddr, data, 0, data.length);
     }
 
+	public TranslationEntry lookUpPageTable(int vpn){
+		if(pageTable ==null) return null;
+		if(vpn >= 0; && vpn < pageTable.length)
+			return pageTable[vpn];
+		else
+			return null;
+		
+	}
+	
+	
+	
     /**
      * Transfer data from this process's virtual memory to the specified array.
      * This method handles address translation details. This method must
