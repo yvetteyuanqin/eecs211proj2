@@ -79,6 +79,44 @@ public class UserProcess {
         Machine.processor().setPageTable(pageTable);
     }
 
+	
+	 /**
+     *  allocating the machine's physical memory so that different processes
+     *  do not overlap in their memory usage.  allocate a fixed number of pages for the process's stack;
+     */
+	public boolean allocate(int vpn, int needPages, boolean isReadOnly){
+		LinkedList<TranslationEntry> allocatePages = new LinkedList<TranslationEntry>()
+		
+		for(int i = 0; i < needPages; i++){
+			int ppn = UserKernel.newPage();
+			if(ppn == -1) {
+				Lib.debug(dbgProcess,"\nError in allocating a new page.\n");
+				
+				for(int j = 0; j < allocatePages.size();j++){
+						TranslationEntry target = allocatePagesp[j];
+						pageTable[target] = new TranslationEntry(target.vpn,0 , false, false,false, false);
+						UserKernel.deletePage(target.ppn);
+						numPages--;
+					
+				}
+				
+				return false;
+			
+			}else{
+				TranslationEntry target = new TranslationEntry(vpn+i,ppn,true, isReadOnly, false, false);
+				allocatePages.add(target);
+				pageTable[vpn + i] = target;
+				numPages++;
+				
+			}
+			
+			
+		}
+		return true;
+	 }
+	 
+	
+	
     /**
      * Read a null-terminated string from this process's virtual memory. Read at
      * most <tt>maxLength + 1</tt> bytes from the specified address, search for
@@ -799,5 +837,7 @@ public class UserProcess {
     protected int PID;//process number to identify root process used in halt()
     protected Lock cntLock = new Lock();//counter lock
     protected OpenFile[] descriptors;
+	protected Coff coff;
+	protected TranslationEntry[] pageTable;
 
 }
