@@ -182,6 +182,10 @@ public class UserProcess {
 	}
 	
 	
+	public TranslationEntry translateVirtualMemory(int vaddr) {
+        return lookUpPageTable(UserKernel.getVirtualPageNumber(vaddr));
+    }
+	
 	
     /**
      * Transfer data from this process's virtual memory to the specified array.
