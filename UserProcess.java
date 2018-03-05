@@ -115,6 +115,20 @@ public class UserProcess {
 		return true;
 	 }
 	 
+	 
+	//***************
+	public void releaseResource(){
+		for(int i = 0l i < pageTable.size(); i++){
+			if(pageTable[i].valid){
+				UserKernel.deletePage(pageTable[i].ppn);
+				pageTable[i] = new TranslationEntry(pageTable[i].vpn,0 , false, false,false, false);
+			}
+			//***************
+			numPages =0;
+		}
+		 
+		 
+	}
 	
 	
     /**
