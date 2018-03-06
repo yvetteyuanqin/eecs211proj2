@@ -346,11 +346,17 @@ public class UserProcess {
         initialPC = coff.getEntryPoint();
 
         // next comes the stack; stack pointer initially points to top of it
-        numPages += stackPages;
+        if(allocatePhysicalMemory(numPages, stackPages, false) == false){
+				releaseResource();
+				return false;
+			}
         initialSP = numPages * pageSize;
 
         // and finally reserve 1 page for arguments
-        numPages++;
+        if(allocatePhysicalMemory(numPages, 1 , false) == false){
+				releaseResource();
+				return false;
+			}
 
         if (!loadSections())
             return false;
@@ -467,11 +473,118 @@ public class UserProcess {
         return 0;
     }
 
+	/*Implement our system calls starting here, function notations copy from syscall.h*/
 	
+	private int handleExit(int status){
+		if(parentProcess!=null){
+				parentProcess.statusLock.acquire();
+				parentProcess.childrenExitStatus.put(pID, status);
+				parentProcess.statusLock.release();
+		}
+		
+		unloadSections();
+		
+		int childrenNum = childrenProcess.size();
+		for(int i=0; i< childrenNum;i++){
+			UserProcess child = childrenProcess.removeFirst();
+			child.parentProcess=null;
+			}
+
+		if(pID==0){
+			Kernel.kernel.terminate();
+		}else{
+			UThread.finish();
+		}
+		return 0;
+		
+	}
 	
-	
-	
-    /*Implement our system calls starting here, function notations copy from syscall.h*/
+	private int handleExec(int vAddr,int argSize,int argsVAddr ){
+		if(vAddr<0||argSize<0||argsVAddr<0){
+			Lib.debug(dbgProcess, "Error:Invalid parameter");
+			return -1;
+		}
+		String fileName=readVirtualMemoryString(vAddr, 256);
+		
+		if(fileName==null){
+			Lib.debug(dbgProcess, "Error : filename is null");
+			return -1;
+		}
+		
+		if(!fileName.contains(".coff")){
+			Lib.debug(dbgProcess, "Error: Filename format should be .coff");
+			return -1;
+		}
+		
+		String[] args=new String[argSize];
+		for(int i=0 ; i < argSize; i++){
+			byte[] buffer = new byte[4];
+			int readLength = readVirtualMemory(argsVAddr + i*4,buffer );
+			if(readLength != 4){
+				Lib.debug(dbgProcess, "Error:Read argument address ");
+				return -1;
+			}
+			int argVAddr=Lib.bytesToInt(buffer, 0);
+			String arg=readVirtualMemoryString(argVAddr,256);
+			if(arg==null){
+				Lib.debug(dbgProcess, "Error:Read argument failed");
+				return -1;
+			}
+			args[i]=arg;
+		}
+		
+		UserProcess child = UserProcess.newUserProcess();
+		if(child.execute(fileName, args) == false){
+			Lib.debug(dbgProcess, "Error:Execute child process failed");
+			return -1;
+		}
+		
+		child.parentProcess =this;
+		this.childrenProcess.add(child);
+		int id=child.pID;
+		return id;
+	}
+
+	private int handleJoin(int pID,int vAddr){
+		if( pID<0 || vAddr<0 ){
+			return -1;
+		}
+		UserProcess child=null;
+		for(int i = 0; i < childrenProcess.size(); i++){
+			if(childrenProcess.get(i).pID==pID){
+				child=childrenProcess.get(i);
+				break;
+			}
+		}
+		
+		if(child==null){
+			Lib.debug(dbgProcess, "Error:pID is not the child");
+			return -1;
+		}
+		child.thread.join();
+
+		child.parentProcess=null;
+		childrenProcess.remove(child);
+		statusLock.acquire();
+		Integer status=childrenExitStatus.get(child.pID);
+		statusLock.release();
+		if(status == null){
+			Lib.debug(dbgProcess, "Error:Cannot find the exit status of the child");
+			return 0;
+		}else{
+			//status int 32bits
+			byte[] buffer=new byte[4];
+			buffer=Lib.bytesFromInt(status);
+			int count=writeVirtualMemory(statusVAddr,buffer);
+			if(count == 4){
+				return 1;
+			}else{
+				Lib.debug(dbgProcess, "Error:Write status failed");
+				return 0;
+			}
+		}
+	}
+    
 
     /**
      * Attempt to open the named disk file, creating it if it does not exist,
@@ -828,6 +941,18 @@ public class UserProcess {
 
                 return handleUnlink(a0);
 
+			case syscallExec:
+			
+                return handleExec(a0, a1, a2);
+				
+			case syscallJoin:
+			
+                return handleJoin(a0,a1);
+				
+			case syscallExit:
+
+                return handleExit(a0);
+				
             default:
                 Lib.debug(dbgProcess, "Unknown syscall " + syscall);
                 Lib.assertNotReached("Unknown system call!");
@@ -890,5 +1015,10 @@ public class UserProcess {
     protected OpenFile[] descriptors;
 	protected Coff coff;
 	protected TranslationEntry[] pageTable;
+	
+	
+	protected UserProcess parentProcess;
+	protected LinkedList<UserProcess> childrenProcess; 
+	protected Lock statusLock;
 
 }
